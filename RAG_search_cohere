@@ -1,0 +1,101 @@
+#title: RAG-powered search using Cohere API from a pdf or txt file
+#author: Abe Arafat
+#credit: heavily inspired from Eddie Kim's Technical Workshop at CUCAI 2024
+#NB: update constants before running
+#NB: you may need to install convertapi and cohere packages
+
+import convertapi
+import cohere
+import os
+import uuid
+import json
+
+
+FILEPATH = '/path/to/your/file.pdf' #Update for your file
+CONVERTAPI_SECRET_KEY = 'XXX' # Optional, only required for pdf
+COHERE_KEY = 'XXX'
+IS_PDF = True # True = PDF, False = TXT
+
+co = cohere.Client(COHERE_KEY)
+
+root_path, _ = os.path.splitext(FILEPATH)
+folder_path = os.path.dirname(FILEPATH)
+txt_filepath = root_path + ".txt"
+
+user_input = ""
+conv_id = str(uuid.uuid4())
+
+#this will convert a text file to a list of dictionaries to use as documents
+def file_to_list(filename):
+    result_list = []
+    with open(filename, 'r') as file:
+        for line in file:
+            line = line.strip()  # Remove any leading/trailing whitespace
+            if line:  # Check if the line is not empty
+                result_list.append({"text": line})
+    return result_list
+
+def invoke_external_search(query: str):
+  #for now return full document, could add search fucntion here for large docs
+  return file_to_list(txt_filepath)
+
+#convert from pdf to txt and write txt to same folder
+if(IS_PDF):
+  convertapi.api_secret = CONVERTAPI_SECRET_KEY
+  convertapi.convert('txt', {
+      'File': FILEPATH
+  }, from_format = 'pdf').save_files(folder_path)
+
+
+#Chat loop
+while True:
+  user_input = input("User: ")
+
+  #type 'stop' to end script
+  if user_input.lower() == "stop":
+    break
+  
+  #get search terms
+  response = co.chat(
+      message=user_input,
+      model="command-nightly",
+      conversation_id=conv_id,
+      search_queries_only=True
+  )
+
+  #if there are no search terms, rerun query for normal output
+  if not response.is_search_required:
+    response = co.chat(
+      message=user_input,
+      model="command-nightly",
+      conversation_id=conv_id,
+      search_queries_only=True
+    )
+    print(
+      "\nChatbot:\n", 
+      response.text.strip(),
+      "\n")
+    continue
+  
+  # prepare all queries to be passed to external search
+  # could be restructured depending on implementation of external search
+  all_queries = ""
+  for query in response.search_queries:
+    all_queries = all_queries + "; "+ query["text"]
+    
+  # RAG Search
+  response = co.chat(
+    message=user_input,
+    model="command-nightly",
+    conversation_id=conv_id,
+    documents=invoke_external_search(all_queries)
+  )
+
+  print("\nChatbot:\n", response.text.strip(),"\n")
+  
+  # Commented out to keep UI clean, but this shows which documents 
+  # different spans came from
+  #print("\n", json.dumps(response.citations, indent=4), "\n")
+
+
+
